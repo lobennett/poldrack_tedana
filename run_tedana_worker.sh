@@ -28,6 +28,7 @@ echo "Processing subject: $SUBJ_ID (Array task: $SLURM_ARRAY_TASK_ID)"
 apptainer exec "$APPTAINER_IMAGE" python3 "$SCRIPT_DIR/run_tedana.py" \
     --subj-id="$SUBJ_ID" \
     --output-dir="$OUTDIR" \
-    --fmriprep-dir="$FMRIPREP_DIR"
+    --fmriprep-dir="$FMRIPREP_DIR" \
+    --apptainer-image="$APPTAINER_IMAGE"
 
 echo "Completed processing for subject: $SUBJ_ID"
