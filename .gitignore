@@ -1,0 +1,9 @@
+# Formatting
+.ruff_cache
+
+# Example directories and logs from running run_tedana.sh
+log/
+output/
+
+# Apptainer/Singularity images
+apptainer/*.sif
