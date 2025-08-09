@@ -1,1 +1,0 @@
- ./run_tedana.sh subs.txt output_dir fmriprep_dir email rest 7 true false false
