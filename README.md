@@ -8,7 +8,10 @@ A utility package for running tedana multi-echo fMRI processing on SLURM cluster
 - Automatic detection of subject count for dynamic array sizing
 - Works from any directory - can be called as a utility package
 - Validates SLURM arguments before job submission
-- Generates outputs in T1w and MNI152NLin2009cAsym spaces
+- TR trimming support for removing initial volumes
+- Choice between t2smap (fast optimal combination) or full tedana workflow (with denoising)
+- Optional use of native space fMRIPrep brain masks for optimal masking
+- Generates outputs in T1w and MNI152NLin2009cAsym spaces (optional)
 
 ## Prerequisites
 
@@ -36,7 +39,7 @@ cd poldrack_tedana
    sbatch pull_image.sh
    ```
    
-   This will download the fMRI processing environment container to `./apptainer/fmri_env_latest.sif`.
+   This will download the fMRI processing environment container to `./apptainer/poldrack_fmri_latest.sif`.
 
 3. Ensure scripts are executable:
 ```bash
@@ -48,7 +51,7 @@ chmod +x run_tedana.sh run_tedana_worker.sh pull_image.sh
 ### Basic Usage
 
 ```bash
-/path/to/poldrack_tedana/run_tedana.sh <subs_file> <output_dir> <fmriprep_dir> [email]
+/path/to/poldrack_tedana/run_tedana.sh <subs_file> <output_dir> <fmriprep_dir> <apptainer_image> [email] [task_name] [trim_by] [full_pipeline] [skip_ants_transform] [use_fmriprep_mask]
 ```
 
 ### Parameters
@@ -56,17 +59,49 @@ chmod +x run_tedana.sh run_tedana_worker.sh pull_image.sh
 - `subs_file`: Path to text file containing subject IDs (one per line)
 - `output_dir`: Directory where tedana outputs will be saved
 - `fmriprep_dir`: Path to fMRIPrep derivatives directory
-- `email` (optional): Email address for SLURM notifications (defaults to mine, logben@stanford.edu)
+- `apptainer_image`: Path to apptainer image file (.sif)
+- `email` (optional): Email address for SLURM notifications (default: logben@stanford.edu)
+- `task_name` (optional): Task name to filter (e.g., 'rest', 'goNogo') (default: all tasks)
+- `trim_by` (optional): Number of TRs to trim from beginning (default: 0)
+- `full_pipeline` (optional): true/false - Run full tedana workflow with denoising vs t2smap only (default: false)
+- `skip_ants_transform` (optional): true/false - Skip ANTs transformations to T1w/MNI space (default: false)
+- `use_fmriprep_mask` (optional): true/false - Use fMRIPrep brain mask for tedana (default: false)
 
-### Example
+### Examples
 
 ```bash
-# Process subjects from a file
+# Basic usage - process all tasks with t2smap workflow
 /path/to/poldrack_tedana/run_tedana.sh \
     /home/user/subjects.txt \
     /scratch/tedana_output \
     /data/fmriprep \
+    /path/to/poldrack_fmri_latest.sif \
     user@stanford.edu
+
+# Process specific task with TR trimming and full tedana pipeline
+/path/to/poldrack_tedana/run_tedana.sh \
+    subs.txt \
+    /scratch/output \
+    /oak/.../fmriprep \
+    /path/to/poldrack_fmri_latest.sif \
+    user@stanford.edu \
+    goNogo \
+    7 \
+    true \
+    false
+
+# Process all tasks, trim 7 TRs, full pipeline, skip ANTs transformations, use fMRIPrep mask
+/path/to/poldrack_tedana/run_tedana.sh \
+    subs.txt \
+    /scratch/output \
+    /oak/.../fmriprep \
+    /path/to/poldrack_fmri_latest.sif \
+    logben@stanford.edu \
+    "" \
+    7 \
+    true \
+    true \
+    true
 ```
 
 ### Subject File Format
@@ -100,8 +135,8 @@ output_dir/
 
 The script submits jobs with the following default settings:
 - **Time limit**: 2 days
-- **CPUs per task**: 8
-- **Memory**: 8GB per CPU
+- **CPUs per task**: 2
+- **Memory**: 64GB total
 - **Partitions**: russpold, hns, normal
 - **Array size**: Automatically set based on number of subjects
 
@@ -176,7 +211,7 @@ Create a subjects file with only the subjects you want to process:
 ```bash
 # Process only first 5 subjects
 head -5 all_subjects.txt > subset.txt
-/path/to/poldrack_tedana/run_tedana.sh subset.txt /output /fmriprep
+/path/to/poldrack_tedana/run_tedana.sh subset.txt /output /fmriprep /path/to/image.sif
 ```
 
 ## License

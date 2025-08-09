@@ -7,3 +7,6 @@ output/
 
 # Apptainer/Singularity images
 apptainer/*.sif
+
+# Unused code and outputs
+archive/

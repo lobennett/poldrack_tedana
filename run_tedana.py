@@ -20,7 +20,7 @@ from nilearn import image
 from nibabel.nifti1 import Nifti1Image
 from nipype.interfaces.ants import ApplyTransforms
 from nipype import config
-from tedana.workflows import t2smap_workflow
+from tedana.workflows import t2smap_workflow, tedana_workflow
 
 
 @dataclass
@@ -49,6 +49,7 @@ class RunGroup:
     key: str
     echo_files: List[EchoFileInfo]
     transforms: TransformFiles
+    mask_file: Optional[Path] = None
 
 
 class TedanaProcessor:
@@ -61,12 +62,20 @@ class TedanaProcessor:
         subject_id: str,
         trim_by: int = None,
         apptainer_image: str = None,
+        task_name: str = None,
+        full_pipeline: bool = False,
+        skip_ants_transform: bool = False,
+        use_fmriprep_mask: bool = False,
     ):
         self.fmriprep_dir = fmriprep_dir
         self.output_dir = output_dir
         self.subject_id = self._normalize_subject_id(subject_id)
         self.trim_by = trim_by or 0
         self.apptainer_image = apptainer_image
+        self.task_name = task_name
+        self.full_pipeline = full_pipeline
+        self.skip_ants_transform = skip_ants_transform
+        self.use_fmriprep_mask = use_fmriprep_mask
         self.logger = self._setup_logging()
 
         # Configure nipype to use apptainer if image is provided.
@@ -123,7 +132,10 @@ class TedanaProcessor:
         if not subject_dir.exists():
             raise ValueError(f"Subject directory does not exist: {subject_dir}")
 
-        pattern = "*echo-*desc-preproc_bold.nii.gz"
+        if self.task_name:
+            pattern = f"*task-{self.task_name}*echo-*desc-preproc_bold.nii.gz"
+        else:
+            pattern = "*echo-*desc-preproc_bold.nii.gz"
         echo_files = list(subject_dir.glob(f"**/{pattern}"))
         self.logger.info(f"Found {len(echo_files)} echo files for {self.subject_id}")
         return echo_files
@@ -221,6 +233,18 @@ class TedanaProcessor:
                     key=run_key, echo_files=[], transforms=transforms
                 )
 
+                if self.use_fmriprep_mask:
+                    base_name = echo_file.name.split("_echo")[0]
+                    mask_path = echo_file.parent / f"{base_name}_desc-brain_mask.nii.gz"
+                    if mask_path.exists():
+                        run_groups[run_key].mask_file = mask_path
+                        self.logger.info(f"Found fMRIPrep mask for {run_key}: {mask_path}")
+                    else:
+                        self.logger.warning(
+                            f"Could not find fMRIPrep mask for {run_key}. "
+                            "Tedana will generate one."
+                        )
+
             run_groups[run_key].echo_files.append(echo_info)
 
         # Sort echoes by echo time within each run
@@ -249,6 +273,10 @@ class TedanaProcessor:
         echo_file_paths = [
             str(echo_info.file_path) for echo_info in run_group.echo_files
         ]
+        tedana_kwargs = {}
+        if run_group.mask_file:
+            tedana_kwargs["mask"] = str(run_group.mask_file)
+            self.logger.info(f"Using provided mask for tedana: {run_group.mask_file}")
 
         # Apply trimming if needed by creating temporary trimmed files
         if self.trim_by > 0:
@@ -271,7 +299,17 @@ class TedanaProcessor:
                 self.logger.info(
                     f"Running tedana for {run_group.key} with {len(trimmed_files)} echoes (trimmed)"
                 )
-                t2smap_workflow(trimmed_files, echo_times, out_dir=str(output_dir))
+                
+                if self.full_pipeline:
+                    tedana_workflow(
+                        trimmed_files,
+                        echo_times,
+                        out_dir=str(output_dir),
+                        tedpca="kundu",
+                        **tedana_kwargs,
+                    )
+                else:
+                    t2smap_workflow(trimmed_files, echo_times, out_dir=str(output_dir), **tedana_kwargs)
 
                 # Clean up temporary files
                 for temp_file in trimmed_files:
@@ -288,7 +326,17 @@ class TedanaProcessor:
             self.logger.info(
                 f"Running tedana for {run_group.key} with {len(echo_file_paths)} echoes"
             )
-            t2smap_workflow(echo_file_paths, echo_times, out_dir=str(output_dir))
+            
+            if self.full_pipeline:
+                tedana_workflow(
+                    echo_file_paths,
+                    echo_times,
+                    out_dir=str(output_dir),
+                    tedpca="kundu",
+                    **tedana_kwargs,
+                )
+            else:
+                t2smap_workflow(echo_file_paths, echo_times, out_dir=str(output_dir), **tedana_kwargs)
 
         # Force garbage collection
         gc.collect()
@@ -331,22 +379,9 @@ class TedanaProcessor:
         )
 
         if self.apptainer_image:
-            # We're already inside the container, so call antsApplyTransforms directly
+            # ANTs is natively available in the container
             import subprocess
 
-            # Update PATH to include ANTs binaries
-            current_path = os.environ.get("PATH", "")
-            ants_bin_path = "/opt/ants/bin"
-            if ants_bin_path not in current_path:
-                os.environ["PATH"] = f"{ants_bin_path}:{current_path}"
-
-            # Set LD_LIBRARY_PATH for ANTs libraries
-            current_ld_path = os.environ.get("LD_LIBRARY_PATH", "")
-            ants_lib_path = "/opt/ants/lib"
-            if ants_lib_path not in current_ld_path:
-                os.environ["LD_LIBRARY_PATH"] = f"{ants_lib_path}:{current_ld_path}"
-
-            # Use the binary name directly since it's now in PATH
             ants_binary = "antsApplyTransforms"
 
             # Build the command
@@ -365,7 +400,7 @@ class TedanaProcessor:
             ]
 
             # Add transforms
-            for transform in transforms:
+            for transform in reversed(transforms):
                 cmd.extend(["--transform", str(transform)])
 
             self.logger.info(f"Running: {' '.join(cmd)}")
@@ -457,12 +492,14 @@ class TedanaProcessor:
             # Get optimally combined tedana image and run tedana
             optcom_file = self._run_tedana(run_group)
 
-            # Apply transformations
-            t1w_output, mni_output = self._process_tedana_outputs(
-                optcom_file, run_group.transforms, run_key
-            )
-
-            results[run_key] = (optcom_file, t1w_output, mni_output)
+            # Apply transformations (if not skipped)
+            if self.skip_ants_transform:
+                results[run_key] = (optcom_file, None, None)
+            else:
+                t1w_output, mni_output = self._process_tedana_outputs(
+                    optcom_file, run_group.transforms, run_key
+                )
+                results[run_key] = (optcom_file, t1w_output, mni_output)
 
             # Force garbage collection between runs
             gc.collect()
@@ -503,6 +540,26 @@ def get_parser() -> argparse.ArgumentParser:
         type=str,
         help="Path to apptainer image containing ANTs tools",
     )
+    parser.add_argument(
+        "--task-name",
+        type=str,
+        help="Task name to filter files (e.g., 'rest', 'spatialTS')",
+    )
+    parser.add_argument(
+        "--full-pipeline",
+        action="store_true",
+        help="Run full tedana workflow with denoising instead of t2smap only",
+    )
+    parser.add_argument(
+        "--skip-ants-transform",
+        action="store_true",
+        help="Skip ANTs transformations to T1w and MNI space",
+    )
+    parser.add_argument(
+        "--use-fmriprep-mask",
+        action="store_true",
+        help="Use the native-space brain mask from fMRIPrep for tedana.",
+    )
     return parser
 
 
@@ -518,6 +575,10 @@ def main():
         subject_id=args.subj_id,
         trim_by=args.trim_by,
         apptainer_image=args.apptainer_image,
+        task_name=args.task_name,
+        full_pipeline=args.full_pipeline,
+        skip_ants_transform=args.skip_ants_transform,
+        use_fmriprep_mask=args.use_fmriprep_mask,
     )
 
     # Run processing
@@ -529,8 +590,10 @@ def main():
         for run_key, (optcom, t1w, mni) in results.items():
             processor.logger.info(f"{run_key}:")
             processor.logger.info(f"  Optcom: {optcom}")
-            processor.logger.info(f"  T1w: {t1w}")
-            processor.logger.info(f"  MNI: {mni}")
+            if t1w is not None:
+                processor.logger.info(f"  T1w: {t1w}")
+            if mni is not None:
+                processor.logger.info(f"  MNI: {mni}")
 
     except Exception as e:
         logging.error(f"Processing failed: {e}")

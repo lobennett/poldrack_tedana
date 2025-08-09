@@ -1,41 +1,52 @@
 #!/bin/bash
 
-#SBATCH --job-name=pull_fmri_env
-#SBATCH --time=01:00:00
-#SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=4G
+#SBATCH --job-name=pull_fmri_envs
+#SBATCH --time=02:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=6G
 #SBATCH --partition=russpold,hns,normal
-#SBATCH --output=log/pull_image-%j.out
-#SBATCH --error=log/pull_image-%j.err
+#SBATCH --output=./log/pull_image-%j.out
+#SBATCH --error=./log/pull_image-%j.err
 
-# Pull apptainer image for tedana processing
-# Can be run standalone or as a SLURM job
+# Pull apptainer images for fMRI processing
 
 set -e  # Exit on any error
 
 # Configuration
 USER=lobennett
-IMG=fmri_env
-TAG=latest
 APPTAINER_DIR="$(pwd)/apptainer"
-IMAGE_FILE="$APPTAINER_DIR/${IMG}_${TAG}.sif"
 
 # Create apptainer directory if it doesn't exist
 mkdir -p "$APPTAINER_DIR"
 
-# Check if image already exists
-if [ -f "$IMAGE_FILE" ]; then
-    echo "Image already exists: $IMAGE_FILE"
-    echo "Remove it if you want to re-download:"
-    echo "  rm $IMAGE_FILE"
-    exit 0
-fi
+# Image configurations: IMG_NAME:TAG
+IMAGES=(
+    "poldrack_fmri:latest"
+    "poldrack_fmri:tedana-0.0.12"
+)
 
-echo "Pulling apptainer image..."
-echo "Source: docker://ghcr.io/$USER/$IMG:$TAG"
-echo "Destination: $IMAGE_FILE"
+# Pull each image
+for img_tag in "${IMAGES[@]}"; do
+    IMG_NAME="${img_tag%:*}"
+    TAG="${img_tag#*:}"
+    IMAGE_FILE="$APPTAINER_DIR/${IMG_NAME}_${TAG}.sif"
+    
+    # Check if image already exists
+    if [ -f "$IMAGE_FILE" ]; then
+        echo "Image already exists: $IMAGE_FILE"
+        echo "Skipping download..."
+        continue
+    fi
+    
+    echo "Pulling apptainer image..."
+    echo "Source: docker://ghcr.io/$USER/$img_tag"
+    echo "Destination: $IMAGE_FILE"
+    
+    # Pull the image
+    apptainer pull "$IMAGE_FILE" docker://ghcr.io/$USER/$img_tag
+    
+    echo "Successfully pulled image to: $IMAGE_FILE"
+    echo ""
+done
 
-# Pull the image
-apptainer pull "$IMAGE_FILE" docker://ghcr.io/$USER/$IMG:$TAG
-
-echo "Successfully pulled image to: $IMAGE_FILE"
+echo "All images processed."
