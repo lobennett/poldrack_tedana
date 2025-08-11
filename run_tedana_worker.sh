@@ -22,11 +22,35 @@ fi
 
 echo "Processing subject: $SUBJ_ID (Array task: $SLURM_ARRAY_TASK_ID)"
 
-# Build the command with base arguments
-CMD="apptainer exec \"$APPTAINER_IMAGE\" python3 \"$SCRIPT_DIR/run_tedana.py\" \
+
+# --- NEW SECTION: Ensure all paths are absolute ---
+# This prevents errors with apptainer's --bind flag.
+# The `realpath` command converts any path (relative or absolute) to a full, canonical path.
+echo "Original SCRIPT_DIR: $SCRIPT_DIR"
+SCRIPT_DIR_ABS=$(realpath "$SCRIPT_DIR")
+echo "Absolute SCRIPT_DIR: $SCRIPT_DIR_ABS"
+
+echo "Original OUTDIR: $OUTDIR"
+OUTDIR_ABS=$(realpath "$OUTDIR")
+echo "Absolute OUTDIR: $OUTDIR_ABS"
+
+echo "Original FMRIPREP_DIR: $FMRIPREP_DIR"
+FMRIPREP_DIR_ABS=$(realpath "$FMRIPREP_DIR")
+echo "Absolute FMRIPREP_DIR: $FMRIPREP_DIR_ABS"
+# --- END NEW SECTION ---
+
+
+# Build the command using the new absolute path variables (_ABS)
+CMD="apptainer exec \
+    --containall \
+    --bind \"$SCRIPT_DIR_ABS:$SCRIPT_DIR_ABS\" \
+    --bind \"$OUTDIR_ABS:$OUTDIR_ABS\" \
+    --bind \"$FMRIPREP_DIR_ABS:$FMRIPREP_DIR_ABS\" \
+    \"$APPTAINER_IMAGE\" \
+    python3 \"$SCRIPT_DIR_ABS/run_tedana.py\" \
     --subj-id=\"$SUBJ_ID\" \
-    --output-dir=\"$OUTDIR\" \
-    --fmriprep-dir=\"$FMRIPREP_DIR\" \
+    --output-dir=\"$OUTDIR_ABS\" \
+    --fmriprep-dir=\"$FMRIPREP_DIR_ABS\" \
     --apptainer-image=\"$APPTAINER_IMAGE\""
 
 # Add trim_by parameter
